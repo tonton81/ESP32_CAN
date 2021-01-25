@@ -1,5 +1,5 @@
 # ESP32_CAN
-ESP32 CAN library based off of FlexCAN_T4
+ESP32 CAN library based off of FlexCAN_T4 -> https://github.com/tonton81/FlexCAN_T4
 
 Library based off of FlexCAN_T4, but for ESP32.
 Includes Circular_Buffer queues, and collin's Object Oriented CAN supported.

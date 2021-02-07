@@ -18,12 +18,14 @@ ESP32_CAN_CLASS class ESP32_CAN : public ESP32_CAN_Base {
     void setTX(uint8_t pin);
     void setRX(uint8_t pin);
     uint64_t events();
-    void setBaudRate(uint32_t baud, ESP32_CAN_LISTEN_ONLY listen_only = NORMAL_MODE);
+    uint32_t setBaudRate(uint32_t baud, ESP32_CAN_LISTEN_ONLY listen_only = NORMAL_MODE);
     void onReceive(_ESP32_CAN_ptr handler);
     void setFilter(uint32_t id, ESP32_CAN_IDE frame_type = ASSUMED_IDE);
     void setFilter(uint32_t id1, uint32_t id2, ESP32_CAN_IDE frame_type = ASSUMED_IDE);
     void setFilter(uint32_t id1, uint32_t id2, uint32_t id3, ESP32_CAN_IDE frame_type = ASSUMED_IDE);
     void setFilterRange(uint32_t id1, uint32_t id2, ESP32_CAN_IDE frame_type = ASSUMED_IDE);
+    void _CAN_EVENTS_COMMON();
+    int messages_available() { return rxBuffer.size(); }
   private:
     Circular_Buffer<uint8_t, (uint32_t)_rxSize, sizeof(CAN_message_t)> rxBuffer;
     Circular_Buffer<uint8_t, (uint32_t)_txSize, sizeof(CAN_message_t)> txBuffer;
@@ -32,6 +34,7 @@ ESP32_CAN_CLASS class ESP32_CAN : public ESP32_CAN_Base {
     uint32_t currentBitrate = 500000;
     _ESP32_CAN_ptr _mainHandler;
     void handleInterrupt();
+    void tx_task();
     static void onInterrupt(void* arg) { _CAN->handleInterrupt(); }
     intr_handle_t _intrHandle;
 };

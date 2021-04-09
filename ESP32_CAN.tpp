@@ -38,7 +38,16 @@ static void _CAN_TASK(void * parameter) {
     static volatile uint32_t *addr = &(*(volatile uint32_t*)(REG_BASE));
     if ( !(addr[REG_MOD] & 0x1) ) { /* not in reset mode */
       if ( !_CAN->isEventsUsed && _CAN->messages_available() ) _CAN->_CAN_EVENTS_COMMON();
-      _CAN->tx_task();
+
+      if ( !(addr[REG_SR] & 0xC0) ) { /* transmit only when bus off and error states are good */
+        _CAN->tx_task();
+      }
+      else { /* reset controller as long as bus off or error states are active (recovery) */
+        addr[REG_MOD] |= 0x1;
+        addr[REG_TXERR] = 0x00; /* reset error counter */
+        addr[REG_RXERR] = 0x00; /* reset error counter */
+        addr[REG_MOD] &= ~0x1;
+      }
     }
     vTaskDelay(1);
   }

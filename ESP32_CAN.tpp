@@ -32,6 +32,7 @@
 #include "soc/dport_reg.h"
 #include "driver/gpio.h"
 
+TaskHandle_t CANBUS_TASK = NULL;
 
 static void _CAN_TASK(void * parameter) {
   while(1) {
@@ -63,7 +64,7 @@ ESP32_CAN_FUNC ESP32_CAN_OPT::ESP32_CAN() {
     2048*5,        /* Stack size of task */
     NULL,          /* parameter of the task */
     4,             /* priority of the task */
-    NULL,
+    &CANBUS_TASK,
     1);            /* CORE 1 */         
 }
 

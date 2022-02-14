@@ -49,7 +49,7 @@ static void _CAN_TASK(void * parameter) {
         addr[REG_MOD] &= ~0x1;
       }
     }
-    vTaskDelay(1);
+    vTaskDelay(pdMS_TO_TICKS(5));
   }
   vTaskDelete( NULL );
 }
@@ -163,7 +163,6 @@ ESP32_CAN_FUNC void IRAM_ATTR ESP32_CAN_OPT::handleInterrupt() {
   uint8_t interrupt = addr[REG_IR];
   uint8_t cmr = 0;
   if (interrupt & (1U << 0)) { /* Receive Interrupt */
-    volatile uint32_t *addr = &(*(volatile uint32_t*)(REG_BASE));
     msg.flags.extended = (addr[REG_SFF] & 0x80) ? true : false;
     msg.flags.remote = (addr[REG_SFF] & 0x40) ? true : false;
     msg.len = (addr[REG_SFF] & 0x0f);

@@ -52,7 +52,18 @@
 #define REG_EFF                    0x10
 #define REG_ACRn(n)                (0x10 + n)
 #define REG_AMRn(n)                (0x14 + n)
+#define REG_RMC                    0x1D
 #define REG_CDR                    0x1F
+
+#define ESP32_CAN_TASK_SUSPEND \
+  if ( eTaskGetState(CANBUS_TASK) == eSuspended ) was_suspended = 1; \
+  vTaskSuspend(CANBUS_TASK);
+
+
+#define ESP32_CAN_TASK_RESTORE \
+  if ( !was_suspended ) vTaskResume(CANBUS_TASK); \
+  was_suspended = 0;
+
 
 typedef struct CAN_message_t {
   uint32_t id = 0;          // can identifier
@@ -132,6 +143,8 @@ class ESP32_CAN_Base {
     virtual int write(const CAN_message_t &msg) = 0;
     volatile bool isEventsUsed = 0;
     virtual void tx_task() = 0;
+    virtual uint8_t error_report();
+    volatile uint8_t error = 0;
 };
 
 static ESP32_CAN_Base* _CAN = nullptr;
@@ -158,6 +171,8 @@ ESP32_CAN_CLASS class ESP32_CAN : public ESP32_CAN_Base {
     void setFilterRange(uint32_t id1, uint32_t id2, ESP32_CAN_IDE frame_type = ASSUMED_IDE);
     void _CAN_EVENTS_COMMON();
     int messages_available() { return rxBuffer.size(); }
+    uint8_t error_report();
+
   private:
     Circular_Buffer<uint8_t, (uint32_t)_rxSize, sizeof(CAN_message_t)> rxBuffer;
     Circular_Buffer<uint8_t, (uint32_t)_txSize, sizeof(CAN_message_t)> txBuffer;
@@ -169,6 +184,7 @@ ESP32_CAN_CLASS class ESP32_CAN : public ESP32_CAN_Base {
     void tx_task();
     static void onInterrupt(void* arg) { _CAN->handleInterrupt(); }
     intr_handle_t _intrHandle;
+    volatile bool was_suspended = 0;
 };
 
 #include "ESP32_CAN.tpp"

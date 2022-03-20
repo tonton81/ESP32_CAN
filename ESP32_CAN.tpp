@@ -37,20 +37,29 @@ TaskHandle_t CANBUS_TASK = NULL;
 static void _CAN_TASK(void * parameter) {
   while(1) {
     static volatile uint32_t *addr = &(*(volatile uint32_t*)(REG_BASE));
-    if ( !(addr[REG_MOD] & 0x1) ) { /* not in reset mode */
-      if ( !_CAN->isEventsUsed && _CAN->messages_available() ) _CAN->_CAN_EVENTS_COMMON();
+/*
+    If bus-off is triggered, the controller disables itself with no
+    self-recovery. The CPU must manually re-enable the controller.
+*/
+    if ( (addr[REG_MOD] & 0x1) ) addr[REG_MOD] &= ~0x1;
 
-      if ( !(addr[REG_SR] & 0xC0) ) { /* transmit only when bus off and error states are good */
-        _CAN->tx_task();
-      }
-      else { /* reset controller as long as bus off or error states are active (recovery) */
+/*
+    If the controller is active:
+      1) if the error counters exceed the limit, reset the counters
+      2) transmit only when bus-on and counter limit is not flagged.
+*/
+    if ( !(addr[REG_MOD] & 0x1) ) { /* not in reset mode */
+      if ( (addr[REG_SR] & 0xC0) ) {
         addr[REG_MOD] |= 0x1;
-        addr[REG_TXERR] = 0x00; /* reset error counter */
-        addr[REG_RXERR] = 0x00; /* reset error counter */
+        addr[REG_RXERR] = addr[REG_TXERR] = 0x00;
         addr[REG_MOD] &= ~0x1;
       }
+      if ( !_CAN->isEventsUsed && _CAN->messages_available() ) _CAN->_CAN_EVENTS_COMMON();
+      if ( !((addr[REG_SR] & 0xC0) == 0xC0) ) { /* transmit only when bus off and error states are good */
+        _CAN->tx_task();
+      }
     }
-    vTaskDelay(pdMS_TO_TICKS(5));
+    vTaskDelay(1);
   }
   vTaskDelete( NULL );
 }
@@ -58,10 +67,11 @@ static void _CAN_TASK(void * parameter) {
 
 ESP32_CAN_FUNC ESP32_CAN_OPT::ESP32_CAN() {
   _CAN = this;
+  vTaskSuspend(CANBUS_TASK); /* suspend task until configured */
   xTaskCreatePinnedToCore(
     _CAN_TASK,     /* Task function. */
     "_CAN_TASK",   /* name of task. */
-    2048*5,        /* Stack size of task */
+    2048 * 2,      /* Stack size of task */
     NULL,          /* parameter of the task */
     4,             /* priority of the task */
     &CANBUS_TASK,
@@ -84,6 +94,7 @@ ESP32_CAN_FUNC void ESP32_CAN_OPT::setRX(uint8_t pin) {
 
 
 ESP32_CAN_FUNC uint32_t ESP32_CAN_OPT::setBaudRate(uint32_t baud, ESP32_CAN_LISTEN_ONLY listen_only) {
+  ESP32_CAN_TASK_SUSPEND;
   volatile uint32_t *addr = &(*(volatile uint32_t*)(REG_BASE));
   currentBitrate = baud;
   bool wasResetMode = !(addr[REG_MOD] & 0x1);
@@ -118,33 +129,32 @@ ESP32_CAN_FUNC uint32_t ESP32_CAN_OPT::setBaudRate(uint32_t baud, ESP32_CAN_LIST
   addr[REG_CDR] = 0xCF; /* pelican mode, clockout disabled, comparator disabled */
   addr[REG_BTR0] = priv_btr >> 8;
   addr[REG_BTR1] = priv_btr;
-  addr[REG_TXERR] = 0x00; /* reset error counter */
-  addr[REG_RXERR] = 0x00; /* reset error counter */
+  addr[REG_RXERR] = addr[REG_TXERR] = 0x00; /* reset error counters */
   ( listen_only == LISTEN_ONLY ) ? addr[REG_MOD] |= 0x2 : addr[REG_MOD] &= ~0x2;
   if ( wasResetMode ) addr[REG_MOD] &= ~0x1;
+  ESP32_CAN_TASK_RESTORE;
   return best_baud;
 }
 
 
 ESP32_CAN_FUNC void ESP32_CAN_OPT::begin() {
+  vTaskSuspend(CANBUS_TASK); /* suspend task until configured */
   for (uint8_t i = 0; i < SIZE_LISTENERS; i++) listener[i] = nullptr;
   volatile uint32_t *addr = &(*(volatile uint32_t*)(REG_BASE));
   DPORT_CLEAR_PERI_REG_MASK(DPORT_PERIP_RST_EN_REG, DPORT_CAN_RST);
   DPORT_SET_PERI_REG_MASK(DPORT_PERIP_CLK_EN_REG, DPORT_CAN_CLK_EN);
   setBaudRate(currentBitrate, LISTEN_ONLY);
   addr[REG_MOD] |= 0x1;
-  addr[REG_IER] = (1U << 0) | /* receive interrupt */
-                  (1U << 1) | /* transmit interrupt */
-                  (1U << 2) | /* error warning interrupt */
-                  (1U << 3) | /* overrun interrupt */
-                  (1U << 7); /* bus error interrupt */
-  for ( uint8_t i = 0; i < 4; i++ ) { /* set filters to allow everything */    addr[REG_ACRn(i)] = 0x0;
+  for ( uint8_t i = 0; i < 4; i++ ) { /* set filters to allow everything */
+    addr[REG_ACRn(i)] = 0x0;
     addr[REG_AMRn(i)] = 0xFF;
   }
   addr[REG_OCR] = 0x02; /* normal output mode */
   (void)addr[REG_ECC]; /* clear errors */ 
   (void)addr[REG_IR]; /* clear interrupts */
   addr[REG_MOD] = 0xA; /* single filter mode, listen only mode */
+  addr[REG_IER] = 0x1; /* receive interrupt */
+  vTaskResume(CANBUS_TASK); /* resume task after configuration */
 }
 
 
@@ -158,12 +168,73 @@ ESP32_CAN_FUNC void ESP32_CAN_OPT::onReceive(_ESP32_CAN_ptr handler) {
 }
 
 
+ESP32_CAN_FUNC uint8_t ESP32_CAN_OPT::error_report() {
+  if ( !error ) return 0;
+  Serial.println("\n\n****************************************\n");
+  Serial.print("*** Error Report: ");
+  if ( ((error & 0xC0) >> 6) == 0 ) Serial.print("bit error");
+  if ( ((error & 0xC0) >> 6) == 1 ) Serial.print("form error");
+  if ( ((error & 0xC0) >> 6) == 2 ) Serial.print("stuff error");
+  if ( ((error & 0xC0) >> 6) == 3 ) Serial.print("other type of error");
+  Serial.printf("   Direction: %s   ", ((error & 0x20) ? "RX" : "TX"));
+  if ( (error & 0x1F) == 0b00011 ) Serial.print("start of frame");
+  if ( (error & 0x1F) == 0b00010 ) Serial.print("ID.28 to ID.21");
+  if ( (error & 0x1F) == 0b00110 ) Serial.print("ID.20 to ID.18");
+  if ( (error & 0x1F) == 0b00100 ) Serial.print("bit SRTR");
+  if ( (error & 0x1F) == 0b00101 ) Serial.print("bit IDE");
+  if ( (error & 0x1F) == 0b00111 ) Serial.print("ID.17 to ID.13");
+  if ( (error & 0x1F) == 0b01111 ) Serial.print("ID.12 to ID.5");
+  if ( (error & 0x1F) == 0b01110 ) Serial.print("ID.4 to ID.0");
+  if ( (error & 0x1F) == 0b01100 ) Serial.print("bit RTR");
+  if ( (error & 0x1F) == 0b01101 ) Serial.print("reserved bit 1");
+  if ( (error & 0x1F) == 0b01001 ) Serial.print("reserved bit 0");
+  if ( (error & 0x1F) == 0b01010 ) Serial.print("data field");
+  if ( (error & 0x1F) == 0b01000 ) Serial.print("CRC sequence");
+  if ( (error & 0x1F) == 0b11000 ) Serial.print("CRC delimiter");
+  if ( (error & 0x1F) == 0b11001 ) Serial.print("acknowledge slot");
+  if ( (error & 0x1F) == 0b11011 ) Serial.print("acknowledge delimiter");
+  if ( (error & 0x1F) == 0b11010 ) Serial.print("end of frame");
+  if ( (error & 0x1F) == 0b10010 ) Serial.print("intermission");
+  if ( (error & 0x1F) == 0b10001 ) Serial.print("active error flag");
+  if ( (error & 0x1F) == 0b10110 ) Serial.print("passive error flag");
+  if ( (error & 0x1F) == 0b10011 ) Serial.print("tolerate dominant bits");
+  if ( (error & 0x1F) == 0b10111 ) Serial.print("error delimiter");
+  if ( (error & 0x1F) == 0b11100 ) Serial.print("overload flag");
+  Serial.println("\n****************************************\n");
+  return error;
+}
+
+
 ESP32_CAN_FUNC void IRAM_ATTR ESP32_CAN_OPT::handleInterrupt() {
   CAN_message_t msg;
   volatile uint32_t *addr = &(*(volatile uint32_t*)(REG_BASE));
-  uint8_t interrupt = addr[REG_IR];
-  uint8_t cmr = 0;
-  if (interrupt & (1U << 0)) { /* Receive Interrupt */
+  uint8_t interrupt = addr[REG_IR], cmr = 0;
+  error = addr[REG_ECC];
+/*
+  I found a new bug in the hardware FIFO. If the ECC register reports errors
+  (no relation to the RXERR/TXERR registers), that frame may be corrupt and
+  partially written to FIFO while the pointer shifts, thereby reporting a valid
+  frame when it is not. This register is only active if you have bad line issues.
+  Bad cabling/termination, hot-plugging, and shorting the CANH/CANL lines for
+  stability checks. This workaround discards 1x FIFO queue per interrupt if the
+  ECC register is being flagged. If the line returns to normal then so does
+  the ISR. Bug was found during a slave node setup with switch statement, and an
+  un-called switch call was triggered very intermittantly over long periods of time.
+  It became aparent more intermittant as I started shorting the line multiple times
+  and seeing the switch statement being fired, even though I was not calling it!
+  This has ressolved that issue.
+*/
+  if ( error ) {
+    addr[REG_CMR] = 0xC;
+    return;
+  }
+
+/*
+  Always check the RMC (NOT JUST the IER receive interrupt bit).
+  I have noticed the RMC sometimes returns 0 when an interrupt occurs.
+  The RMC is the count of queues in the HW FIFO.
+*/
+  if ( (interrupt & (1U << 0)) && (addr[REG_RMC]) ) { /* Receive Interrupt */
     msg.flags.extended = (addr[REG_SFF] & 0x80) ? true : false;
     msg.flags.remote = (addr[REG_SFF] & 0x40) ? true : false;
     msg.len = (addr[REG_SFF] & 0x0f);
@@ -261,13 +332,6 @@ ESP32_CAN_FUNC void IRAM_ATTR ESP32_CAN_OPT::_CAN_EVENTS_COMMON() {
       }
     }
   }
-
-  volatile uint32_t *addr = &(*(volatile uint32_t*)(REG_BASE));
-  if ( addr[REG_SR] & 0xC0 ) { /* bus and error status */
-    if ( addr[REG_MOD] & 0x1 ) { /* if in reset mode */
-      addr[REG_MOD] &= ~ 0x1;
-    }
-  }
 }
 
 
@@ -294,6 +358,7 @@ ESP32_CAN_FUNC bool ESP32_CAN_OPT::detachObj (CANListener *listener) {
 
 
 ESP32_CAN_FUNC void ESP32_CAN_OPT::setFilter(uint32_t id, ESP32_CAN_IDE frame_type) {
+  ESP32_CAN_TASK_SUSPEND;
   volatile uint32_t *addr = &(*(volatile uint32_t*)(REG_BASE));
   bool wasResetMode = !(addr[REG_MOD] & 0x1);
   addr[REG_MOD] |= 0x1;
@@ -327,10 +392,12 @@ ESP32_CAN_FUNC void ESP32_CAN_OPT::setFilter(uint32_t id, ESP32_CAN_IDE frame_ty
     addr[REG_AMRn(3)] = (uint8_t)((mask << (3)) >> 0);
   }
   if ( wasResetMode ) addr[REG_MOD] &= ~0x1;
+  ESP32_CAN_TASK_RESTORE;
 }
 
 
 ESP32_CAN_FUNC void ESP32_CAN_OPT::setFilter(uint32_t id1, uint32_t id2, ESP32_CAN_IDE frame_type) {
+  ESP32_CAN_TASK_SUSPEND;
   volatile uint32_t *addr = &(*(volatile uint32_t*)(REG_BASE));
   bool wasResetMode = !(addr[REG_MOD] & 0x1);
   addr[REG_MOD] |= 0x1;
@@ -366,10 +433,12 @@ ESP32_CAN_FUNC void ESP32_CAN_OPT::setFilter(uint32_t id1, uint32_t id2, ESP32_C
     }
   }
   if ( wasResetMode ) addr[REG_MOD] &= ~0x1;
+  ESP32_CAN_TASK_RESTORE;
 }
 
 
 ESP32_CAN_FUNC void ESP32_CAN_OPT::setFilter(uint32_t id1, uint32_t id2, uint32_t id3, ESP32_CAN_IDE frame_type) {
+  ESP32_CAN_TASK_SUSPEND;
   volatile uint32_t *addr = &(*(volatile uint32_t*)(REG_BASE));
   bool wasResetMode = !(addr[REG_MOD] & 0x1);
   addr[REG_MOD] |= 0x1;
@@ -405,10 +474,12 @@ ESP32_CAN_FUNC void ESP32_CAN_OPT::setFilter(uint32_t id1, uint32_t id2, uint32_
     addr[REG_ACRn(3)] = (uint8_t)((mask << (3)) >> 0);
   }
   if ( wasResetMode ) addr[REG_MOD] &= ~0x1;
+  ESP32_CAN_TASK_RESTORE;
 }
 
 
 ESP32_CAN_FUNC void ESP32_CAN_OPT::setFilterRange(uint32_t id1, uint32_t id2, ESP32_CAN_IDE frame_type) {
+  ESP32_CAN_TASK_SUSPEND;
   volatile uint32_t *addr = &(*(volatile uint32_t*)(REG_BASE));
   bool wasResetMode = !(addr[REG_MOD] & 0x1);
   addr[REG_MOD] |= 0x1;
@@ -452,6 +523,7 @@ ESP32_CAN_FUNC void ESP32_CAN_OPT::setFilterRange(uint32_t id1, uint32_t id2, ES
     addr[REG_AMRn(3)] = (uint8_t)((mask << (3)) >> 0);
   }
   if ( wasResetMode ) addr[REG_MOD] &= ~0x1;
+  ESP32_CAN_TASK_RESTORE;
 }
 
 

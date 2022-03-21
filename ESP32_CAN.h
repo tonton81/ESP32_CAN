@@ -143,7 +143,7 @@ class ESP32_CAN_Base {
     virtual int write(const CAN_message_t &msg) = 0;
     volatile bool isEventsUsed = 0;
     virtual void tx_task() = 0;
-    virtual uint8_t error_report();
+    virtual uint8_t error_report() = 0;
     volatile uint8_t error = 0;
 };
 

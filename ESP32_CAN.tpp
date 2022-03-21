@@ -28,7 +28,14 @@
 
 
 #include <ESP32_CAN.h>
+
+#include "esp_system.h"
+#if defined(ESP_IDF_VERSION_MAJOR) && ESP_IDF_VERSION_MAJOR > 3
+#include "esp_intr_alloc.h"
+#else
 #include "esp_intr.h"
+#endif
+
 #include "soc/dport_reg.h"
 #include "driver/gpio.h"
 
@@ -37,6 +44,7 @@ TaskHandle_t CANBUS_TASK = NULL;
 static void _CAN_TASK(void * parameter) {
   while(1) {
     static volatile uint32_t *addr = &(*(volatile uint32_t*)(REG_BASE));
+    while( !(addr[REG_IER] & 0x1) ) vTaskDelay(1000);
 /*
     If bus-off is triggered, the controller disables itself with no
     self-recovery. The CPU must manually re-enable the controller.
@@ -67,7 +75,6 @@ static void _CAN_TASK(void * parameter) {
 
 ESP32_CAN_FUNC ESP32_CAN_OPT::ESP32_CAN() {
   _CAN = this;
-  vTaskSuspend(CANBUS_TASK); /* suspend task until configured */
   xTaskCreatePinnedToCore(
     _CAN_TASK,     /* Task function. */
     "_CAN_TASK",   /* name of task. */

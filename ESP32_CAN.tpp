@@ -475,11 +475,11 @@ ESP32_CAN_FUNC void ESP32_CAN_OPT::setFilter(uint32_t id1, uint32_t id2, uint32_
     addr[REG_ACRn(1)] = (uint8_t)((id1 << (3)) >> 16);
     addr[REG_ACRn(2)] = (uint8_t)((id1 << (3)) >> 8);
     addr[REG_ACRn(3)] = (uint8_t)((id1 << (3)) >> 0);
-    addr[REG_ACRn(0)] = (uint8_t)((mask << (3)) >> 24);
-    addr[REG_ACRn(1)] = (uint8_t)((mask << (3)) >> 16);
-    addr[REG_ACRn(2)] = (uint8_t)((mask << (3)) >> 8);
-    addr[REG_ACRn(3)] = (uint8_t)((mask << (3)) >> 0);
-  }
+    addr[REG_AMRn(0)] = (uint8_t)((mask << (3)) >> 24);
+    addr[REG_AMRn(1)] = (uint8_t)((mask << (3)) >> 16);
+    addr[REG_AMRn(2)] = (uint8_t)((mask << (3)) >> 8);
+    addr[REG_AMRn(3)] = (uint8_t)((mask << (3)) >> 0);
+    }
   if ( wasResetMode ) addr[REG_MOD] &= ~0x1;
   ESP32_CAN_TASK_RESTORE;
 }

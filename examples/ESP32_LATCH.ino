@@ -1,4 +1,4 @@
-#include <ESP32_CAN.h>
+#include <ESP32_CAN.h> // OONO F-1055 CAN DPDT LATCH
 ESP32_CAN<RX_SIZE_256, TX_SIZE_16> Can0;
 
 

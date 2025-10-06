@@ -20,6 +20,17 @@ void setup() {
   Can0.begin();
   Can0.setBaudRate(125000);
 
+  /* Turn off onboard RGB light */
+  const uint8_t led_pins[3] = { 2, 15, 4 }; /* ONBOARD RGB LIGHT */
+  for ( int i = 0; i < 3; i++ ) {
+    ledcAttachPin(led_pins[i], i + 1); // Bind led to 1-16 PWM channels
+    ledcSetup(i + 1, 12000, 8); // 12 kHz PWM, 8-bit resolution
+  }
+  ledcWrite(1, 256);
+  ledcWrite(2, 256);
+  ledcWrite(3, 256);
+
+
   pinMode(5, INPUT | OUTPUT_OPEN_DRAIN); // SCK
   pinMode(18, INPUT | OUTPUT_OPEN_DRAIN); // MOSI
   pinMode(19, INPUT | OUTPUT_OPEN_DRAIN); // MISO
